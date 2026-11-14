@@ -211,7 +211,7 @@ const TRACKS = [
     pads: [['h1', 40, 0], ['d1', 20, -.45], ['c4', 50, .4], ['climb', 55, 0], ['pre', 18, 0], ['land', 12, 0], ['co6', 20, -.4], ['exit', 60, 0]],
     props: { ground: ['saguaro', 'barrel', 'prickly', 'tumble', 'boulder', 'rockstack', 'skull', 'saguaro', 'boulder', 'barrel'], gp: .62, spireEvery: 11, deck: ['spire', 'boulder', 'rockstack', 'saguaro', 'boulder', 'barrel'], scale: {},
       special: [['rim', 14, 'watch', -1.5], ['rim', 30, 'watch', 1.5], ['climb', 25, 'skull', 1.3], ['pre', 10, 'chevron', -1.3], ['pre', 10, 'chevron', 1.3]] } },
-  { id: 'sea', name: 'SEASIDE BOARDWALK', sub: 'MIDDAY', laps: 3, level: 2, cpu: 1.04, slip: 0.97, seed: 2024,
+  { id: 'sea', name: 'SEASIDE BOARDWALK', sub: 'MIDDAY', laps: 3, level: 2, cpu: 1.03, slip: 0.97, seed: 2024,
     secs: [['start', 40, 0, 0, 0], ['c1', 50, 1.8, 0, 0], ['h1', 55, 0, hy(500), 0], ['c2', 60, -3, hy(500), 0], ['d1', 50, 0, hy(100), 0],
       ['c3', 60, 3.8, hy(100), 0], ['b1', 45, 0, hy(100), 0], ['h2', 50, 0, hy(950), 0], ['c4', 55, -3.5, hy(950), 0], ['d2', 55, 0, hy(150), 0],
       ['c5', 50, 3, hy(150), 0], ['pier0', 40, 0, hy(450), 2600], ['pier1', 70, -3.6, hy(850), 2600], ['pier2', 60, 4, hy(350), 2600], ['pier3', 45, -2.5, hy(700), 2600],
@@ -221,7 +221,7 @@ const TRACKS = [
     props: { ground: ['saguaro', 'barrel', 'prickly', 'tumble', 'saguaro', 'barrel', 'boulder', 'rockstack', 'skull', 'saguaro'], gp: .6, spireEvery: 23, deck: ['tires', 'rockstack', 'watch', 'barrel', 'tires', 'boulder'],
       scale: { saguaro: 1.9, watch: 0.9, spire: 0.9 },
       special: [['pier0', 20, 'watch', -1.5], ['pier0', 20, 'watch', 1.5], ['pre', 10, 'chevron', -1.3], ['pre', 10, 'chevron', 1.3], ['b1', 8, 'skull', 1.8], ['b1', 28, 'skull', -1.8]] } },
-  { id: 'neon', name: 'NEON CITY', sub: 'MIDNIGHT', laps: 3, level: 3, cpu: 1.07, slip: 1.0, seed: 777,
+  { id: 'neon', name: 'NEON CITY', sub: 'MIDNIGHT', laps: 3, level: 3, cpu: 1.055, slip: 1.0, seed: 777,
     secs: [['start', 40, 0, 0, 0], ['c1', 45, 3, 0, 0], ['s1', 45, -3.8, 0, 0], ['h1', 55, 0, hy(900), 0], ['c2', 50, 4.4, hy(900), 0], ['d1', 60, 0, 0, 0],
       ['c3', 55, -4, 0, 0], ['c3b', 45, 3.6, 0, 0], ['h2', 45, 0, hy(700), 0], ['c4', 50, -4.6, hy(700), 0], ['f1', 40, 0, hy(200), 0], ['c4b', 50, 4, hy(200), 0], ['c4c', 40, -4.2, hy(200), 0],
       ['climb', 70, 2, hy(1800), 0], ['rim', 35, 0, hy(1800), 1900], ['hw1', 70, -3.8, hy(2300), 2800], ['hw2', 65, 4.4, hy(1500), 2800], ['hw3', 55, -3.4, hy(2100), 2800],
@@ -368,12 +368,20 @@ const Input = (function () {
     return null;
   }
   const dz = (v, d) => Math.abs(v) < d ? 0 : (v - Math.sign(v) * d) / (1 - d);
+  // analog steering: small deadzone, slight expo curve (fine control near centre) and full lock reached just before the stick's physical limit
+  const stickSteer = v => { const a = Math.min(1, Math.abs(dz(v, 0.07)) / 0.93); return Math.sign(v) * Math.pow(a, 1.35); };
+  // digital steering (keys / d-pad) ramps: quick attack (full lock in ~0.12 s), faster release and reversal, so taps give fine corrections
+  let dSteer = 0;
+  function rampSteer(target, dt) {
+    const rate = target === 0 ? 14 : (Math.sign(target) !== Math.sign(dSteer) && dSteer !== 0 ? 18 : 9);
+    const d = target - dSteer, mx = rate * dt; dSteer += Math.abs(d) <= mx ? d : Math.sign(d) * mx; return dSteer;
+  }
   function poll(dt) {
     const k = eff; for (let i = 0; i < CODES.length; i++) { const c = CODES[i]; eff[c] = keys[c] || hits[c]; hits[c] = false; }
     let kSteer = ((k.ArrowRight || k.KeyD) ? 1 : 0) - ((k.ArrowLeft || k.KeyA) ? 1 : 0);
     let kGas = (k.KeyZ || k.Space || k.ArrowUp || k.KeyW) ? 1 : 0, kBrake = (k.KeyX || k.ArrowDown || k.KeyS) ? 1 : 0;
     let kDrift = !!(k.ShiftLeft || k.ShiftRight || k.KeyC);
-    let steer = kSteer, gas = kGas, brake = kBrake, drift = kDrift;
+    let steer = kSteer, gas = kGas, brake = kBrake, drift = kDrift, analog = false;
     let up = !!(k.ArrowUp || k.KeyW), down = !!(k.ArrowDown || k.KeyS), left = !!(k.ArrowLeft || k.KeyA), right = !!(k.ArrowRight || k.KeyD);
     let confirm = !!(k.Enter || k.Space || k.KeyZ), back = !!(k.Escape || k.KeyX || k.Backspace);
     let pause = !!(k.Escape || k.KeyP), start = !!(k.Enter || k.Space), mute = !!k.KeyM;
@@ -382,18 +390,19 @@ const Input = (function () {
     if (pad) {
       S.padKind = kind(pad.id); S.padId = pad.id;
       const b = i => pad.buttons[i] ? pad.buttons[i].value || (pad.buttons[i].pressed ? 1 : 0) : 0;
-      const ax = dz(pad.axes[0] || 0, 0.14), ay = dz(pad.axes[1] || 0, 0.3);
+      const axRaw = pad.axes[0] || 0, ax = stickSteer(axRaw), axN = dz(axRaw, 0.14), ay = dz(pad.axes[1] || 0, 0.3);
       const dl = b(14) > .5, dr = b(15) > .5, du = b(12) > .5, dd = b(13) > .5;
-      const pSteer = dl ? -1 : dr ? 1 : ax;
+      const pSteer = dl ? -1 : dr ? 1 : ax;   // analog value is used directly; d-pad goes through the ramp below
       const pGas = Math.max(b(7), b(5) > .5 ? 1 : 0), pBrake = b(6);
       const pDrift = b(0) > .5 || b(1) > .5;
       const padActive = Math.abs(pSteer) > 0 || pGas > 0.05 || pBrake > 0.05 || pDrift || b(9) > .5 || du || dd || ay !== 0;
       if (padActive) lastActivity = 'pad';
-      if (Math.abs(pSteer) > 0) steer = pSteer; gas = Math.max(gas, pGas); brake = Math.max(brake, pBrake); drift = drift || pDrift;
-      up = up || du || ay < -0.5; down = down || dd || ay > 0.5; left = left || dl || ax < -0.5; right = right || dr || ax > 0.5;
+      if (Math.abs(pSteer) > 0) { steer = pSteer; analog = !(dl || dr); } gas = Math.max(gas, pGas); brake = Math.max(brake, pBrake); drift = drift || pDrift;
+      up = up || du || ay < -0.5; down = down || dd || ay > 0.5; left = left || dl || axN < -0.5; right = right || dr || axN > 0.5;
       confirm = confirm || b(0) > .5; back = back || b(1) > .5; pause = pause || b(9) > .5; start = start || b(9) > .5 || b(0) > .5; mute = mute || b(8) > .5;
     }
     S.usingPad = lastActivity === 'pad' && !!pad;
+    if (analog) { dSteer = steer; } else steer = rampSteer(steer, Math.min(dt || 1 / 60, 0.05));
     S.steer = Math.max(-1, Math.min(1, steer)); S.gas = gas; S.brake = brake; S.drift = drift;
     S.up = up; S.down = down; S.left = left; S.right = right; S.confirm = confirm; S.back = back; S.pause = pause; S.start = start; S.mute = mute;
     S.pPause = pause && !prev.pause; S.pConfirm = confirm && !prev.confirm; S.pBack = back && !prev.back; S.pStart = start && !prev.start; S.pMute = mute && !prev.mute;
@@ -562,6 +571,7 @@ const TDAudio = (function () {
       case 'spark': { const f = [880, 1175, 1568][Math.min(2, a | 0)]; tone(ac, d, pw.p25, f, t, 0.09, 0.07); tone(ac, d, pw.p25, f * 1.5, t + 0.06, 0.09, 0.05); } break;
       case 'boost': tone(ac, d, 'sawtooth', 320, t, 0.45, 0.07, { sweep: 1400, lp: 3000 }); noise(ac, d, noiseBuf, t, 0.45, 0.1, 'bandpass', 1600, 0.6); break;
       case 'hit': noise(ac, d, noiseBuf, t, 0.2, 0.2, 'lowpass', 1300, 0.7); tone(ac, d, pw.p50, 240, t, 0.12, 0.12, { sweep: 140 }); break;
+      case 'strip': noise(ac, d, noiseBuf, t, 0.045, 0.05, 'bandpass', 520, 1.4); break;   // rumble-strip buzz (>=300 Hz band)
       case 'bump': noise(ac, d, noiseBuf, t, 0.09, 0.1, 'lowpass', 1800, 0.7); break;
       case 'land': tone(ac, d, 'sine', 420, t, 0.16, 0.2, { sweep: 170 }); noise(ac, d, noiseBuf, t, 0.18, 0.14, 'lowpass', 1500, 0.6); break;
       case 'jump': tone(ac, d, 'triangle', 300, t, 0.22, 0.09, { sweep: 800 }); break;
@@ -584,6 +594,7 @@ const TDAudio = (function () {
 })();
 
 // ---------- race simulation: karts, physics, AI, particles ----------
+const LAT = 3.1, CF = 0.30;   // lateral authority (road half-widths/s) and centrifugal coefficient (v4 handling)
 const G = 9000, MAXV = 11000, ACC = 3600, PZ = 700, CAMH = 850, CAMD = 0.9, KW = 250, NK = 12, LAPS = 3, DT = 1 / 60;
 const DRIVERS = [
   { id: 'dash', name: 'DASH', title: 'THE ROOKIE', spd: .98, acc: 1.0, hdl: 1.0, drift: 1.0, hue: 150 },
@@ -629,7 +640,7 @@ function updateParticles(dt) {
   }
 }
 const mod = Track.mod;
-function ev(type, k, v) { if (World.onEvent) World.onEvent(type, k, v); }
+function ev(type, k, v, w) { if (World.onEvent) World.onEvent(type, k, v, w); }
 
 function setupRace(playerLook, laps, opts) {
   opts = opts || {}; World.solo = !!opts.solo;
@@ -650,7 +661,7 @@ function setupRace(playerLook, laps, opts) {
     k.mxMul = isP ? D.spd : 1 + (Track.cpu - 1) * 0.5; k.accMul = D.acc; k.hdl = D.hdl; k.driftMul = D.drift;
     k.dist = slots[s][0]; k.x = slots[s][1]; k.speed = 0; k.y = Track.heightAt(k.dist); k.vy = 0; k.air = false; k.yaw = 0; k.drift = 0; k.driftT = 0; k.driftLvl = 0; k.boostT = 0; k.flash = 0; k.hitCd = 0; k.padCd = 0;
     k.off = World.solo && !isP; if (k.off) { k.dist = -1e7; k.fin = true; k.finT = 1e9; }
-    k.lap = 1; k.fin = k.off; k.finT = k.off ? 1e9 : 0; k.lapStart = 0; k.lapTimes.length = 0; k.best = 1e9; k.wall = 0; k.aiDrift = false; k.stuck = 0;
+    k.lap = 1; k.fin = k.off; k.finT = k.off ? 1e9 : 0; k.lapStart = 0; k.lapTimes.length = 0; k.best = 1e9; k.wall = 0; k.aiDrift = false; k.stuck = 0; k.px = k.x; k.wallHits = 0; k.propHits = 0;
     if (isP) World.player = k;
   }
   World.cam.base = Track.heightAt(World.player.dist);
@@ -679,25 +690,38 @@ function driveKart(k, dt, steer, gas, brake, dbtn) {
       }
     }
   }
-  // ---- steering / centrifugal ----
+  // ---- steering / centrifugal (v4: strong, speed-stable authority; gentler curve push) ----
   let eff = steer;
-  if (k.drift) eff = Math.max(-1.3, Math.min(1.3, k.drift * 0.62 + steer * 0.75));
+  if (k.drift) eff = Math.max(-1.3, Math.min(1.3, k.drift * 0.5 + steer * 0.75));
   const airF = k.air ? 0.25 : 1;
-  k.yaw += (eff - k.yaw) * Math.min(1, dt * 9);
-  const spc = Math.min(1.25, sp);
-  k.x += eff * 2.0 * spc * k.hdl * airF * dt;
-  k.x -= Track.curveAt(k.dist) * 2.0 * spc * spc * 0.28 * Track.slip * (k.drift ? 0.33 : 1) * (k.air ? 0 : 1) * dt;
+  k.yaw += (eff - k.yaw) * Math.min(1, dt * 12);
+  const spc = Math.min(1.25, sp), hd = 1 + (k.hdl - 1) * 0.5;
+  const auth = LAT * Math.min(1, spc / 0.4) * (1 - 0.12 * Math.max(0, Math.min(1, (spc - 0.6) / 0.4)));   // ramps in at low speed, only ~12% weaker at top speed
+  k.px = k.x;
+  k.x += eff * auth * hd * airF * dt;
+  const cs = Math.min(1.1, spc);
+  k.x -= Track.curveAt(k.dist) * CF * cs * cs * Track.slip * (k.drift ? 0.33 : 1) * (k.air ? 0 : 1) * dt;
+  // soft edge assist: rumble strip near the edge/rail = light slowdown + gentle auto-correction toward the road, well before any hard hit
+  if (!k.air) {
+    const e0 = deck ? 0.84 : 0.9, e1 = deck ? 0.97 : 1.06, ax = Math.abs(k.x);
+    if (ax > e0) {
+      const e = Math.min(1, (ax - e0) / (e1 - e0)), sg = Math.sign(k.x);
+      k.x -= sg * (e * 1.1 + (ax > e1 && !deck ? 0.8 * Math.min(1, (ax - e1) / 0.3) : 0)) * dt;
+      k.speed -= e * (deck ? 900 : 1300) * dt;
+      if (k.isP && e > 0.12) ev('strip', k, e);
+    }
+  }
   // ---- speed ----
   let cap = mx;
   if (k.boostT > 0) { k.boostT -= dt; cap = mx * 1.38; }
   const off = !deck && Math.abs(k.x) > 1.06;
-  if (off && !k.air) cap = Math.min(cap, mx * 0.42);
+  if (off && !k.air) cap = Math.min(cap, mx * 0.5);
   if (!k.air) {
     if (gas > 0) k.speed += ACC * k.accMul * gas * Math.max(0.12, 1 - k.speed / (mx * 1.25)) * dt;
     else if (brake <= 0) k.speed -= 1800 * dt;
     if (brake > 0) k.speed -= 9500 * brake * dt;
     if (k.boostT > 0 && k.speed < cap) k.speed = Math.min(cap, k.speed + 9000 * dt);
-    if (k.speed > cap) k.speed = Math.max(cap, k.speed - (off ? 9000 : 3200) * dt);
+    if (k.speed > cap) k.speed = Math.max(cap, k.speed - (off ? 5200 : 3200) * dt);
   } else k.speed -= 120 * dt;
   if (k.speed < 0) k.speed = 0;
   const old = k.dist; k.dist += k.speed * dt;
@@ -705,7 +729,15 @@ function driveKart(k, dt, steer, gas, brake, dbtn) {
   const pi = Track.padAt[mod(Math.floor(k.dist / SEG))];
   if (pi >= 0 && !k.air && k.padCd <= 0 && Math.abs(k.x - Track.pads[pi].o) < 0.34) { k.boostT = Math.max(k.boostT, 1.2); k.padCd = 0.8; ev('pad', k); }
   // ---- walls on the coaster deck, edge of the world off-road ----
-  if (deck) { if (Math.abs(k.x) > 0.97) { const s = Math.sign(k.x); k.x = s * 0.97; k.speed -= 1300 * dt; k.wall = 0.2; if (k.speed > 2500) ev('scrape', k, s); if (k.drift && Math.sign(k.drift) === s) driftRelease(k); } }
+  if (deck) {
+    if (Math.abs(k.x) > 0.97) {                       // rails stay solid: you can never leave the deck, but contact is a glancing scrape
+      const sg = Math.sign(k.x), first = k.wall <= 0, lv = Math.max(0, sg * (k.x - k.px)) / dt, sev = Math.max(0.12, Math.min(1, lv / 3.2));
+      k.x = sg * 0.97;
+      if (first) { k.speed *= 1 - (0.03 + 0.09 * sev); k.x = sg * (0.97 - 0.02 - 0.05 * sev); k.wallHits = (k.wallHits || 0) + 1; if (k.speed > 2500) ev('scrape', k, sg, sev); if (k.drift && Math.sign(k.drift) === sg) driftRelease(k); }
+      else { k.speed -= 450 * dt; k.scT = (k.scT || 0) - dt; if (k.scT <= 0) { k.scT = 0.2; if (k.speed > 2500) ev('scrape', k, sg, 0.25); } }
+      k.wall = 0.2;
+    }
+  } else if (Math.abs(k.x) > 4.2) k.x = Math.sign(k.x) * 4.2;
   else if (Math.abs(k.x) > 4.2) k.x = Math.sign(k.x) * 4.2;
   // ---- vertical physics (road heights, gravity, jumps) ----
   const R = Track.heightAt(k.dist);
@@ -726,7 +758,12 @@ function driveKart(k, dt, steer, gas, brake, dbtn) {
   }
 }
 function propHit(k, p) {
-  k.speed *= 0.38; k.flash = 0.7; k.hitCd = 0.9; k.x += Math.sign(k.x - p.o || 1) * 0.16; if (k.drift) driftRelease(k); ev('hit', k, p);
+  // glancing contact = clip the edge of the prop (small loss, small shake); only a dead-centre hit costs real speed
+  const hw = 0.1 + PROP_T[p.t][2], d = Math.min(1, Math.abs(p.o - k.x) / hw), sev = 0.3 + 0.7 * (1 - d);
+  k.speed *= 1 - (0.08 + 0.30 * sev); k.flash = 0.25 + 0.4 * sev; k.hitCd = 0.45;
+  const sg = Math.abs(p.o) > 0.5 ? -Math.sign(p.o) : Math.sign(k.x - p.o || 1);     // deflect back toward the road
+  k.x += sg * (0.1 + 0.14 * sev); k.propHits = (k.propHits || 0) + 1;
+  if (k.drift) driftRelease(k); ev('hit', k, sev);
 }
 function driftRelease(k) {
   if (k.drift && k.driftLvl > 0) { k.boostT = [0, 0.75, 1.15, 1.6][k.driftLvl]; ev('mini', k, k.driftLvl); }
@@ -1298,7 +1335,7 @@ UI.drawPodium = function (t, sel) {
 };
 
 // ---------- game flow: states, events, fx, main loop ----------
-const Game = { scr: 'loading', mode: 'gp', modeSel: 0, trk: 0, trkSel: 0, gp: null, bot: false, sel: 0, look: 0, menuSel: 0, t: 0, perf: { n: 0, frameMs: 0, workMs: 0, maxWork: 0, dts: [] }, lastCdN: 99, lapMsg: 0, finishT: 0, summary: { rec: 1e9, newBest: false }, cooldown: { bump: 0, scrape: 0, hit: 0 } };
+const Game = { scr: 'loading', mode: 'gp', modeSel: 0, trk: 0, trkSel: 0, gp: null, bot: false, sel: 0, look: 0, menuSel: 0, t: 0, perf: { n: 0, frameMs: 0, workMs: 0, maxWork: 0, dts: [] }, lastCdN: 99, lapMsg: 0, finishT: 0, summary: { rec: 1e9, newBest: false }, cooldown: { bump: 0, scrape: 0, hit: 0, strip: 0 } };
 const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } } };
 const PAUSE_ITEMS = () => ['RESUME', 'RESTART RACE', 'SOUND: ' + (TDAudio.isMuted() ? 'OFF' : 'ON'), 'QUIT TO TITLE'];
 const RESULT_ITEMS = () => Game.mode === 'gp' ? (Game.gp.cleared ? [Game.gp.done >= 5 ? 'STANDINGS' : 'STANDINGS'] : ['RETRY RACE', 'QUIT TO TITLE']) : ['RETRY', 'TRACK SELECT', 'TITLE SCREEN'];
@@ -1316,7 +1353,7 @@ function startRace() {
 }
 function toScreen(s) { Game.scr = s; Game.menuSel = 0; TDAudio.sfx('ok'); }
 // ---- world events -> sound / rumble / particles ----
-World.onEvent = function (type, k, v) {
+World.onEvent = function (type, k, v, w) {
   const P = World.player, me = k && k.isP; const z = k ? k.dist : 0, lat = k ? k.x * RW : 0;
   switch (type) {
     case 'go': TDAudio.sfx('go'); TDAudio.startMusic('race', Track.idx); break;
@@ -1329,12 +1366,14 @@ World.onEvent = function (type, k, v) {
       if (v > 700) { for (let i = 0; i < 14; i++) emit(0, z, lat + rr(-260, 260), 5, k.speed * 0.2, rr(-900, 900), rr(100, 500), rr(0.5, 0.9), 45, TH.dust[0]); }
       if (me && v > 700) { TDAudio.sfx('land'); World.shake = Math.min(9, 2 + v / 450); Input.rumble(Math.min(1, v / 3000), 0.6, 200); }
       break;
-    case 'hit':
-      for (let i = 0; i < 12; i++) emit(1, z + 150, lat + rr(-120, 120), 60, rr(-1500, 2500), rr(-1800, 1800), rr(600, 2200), rr(0.3, 0.7), 22, i & 1 ? HEX(0xffe080) : HEX(0xffffff));
-      if (me && Game.cooldown.hit <= 0) { Game.cooldown.hit = 0.3; TDAudio.sfx('hit'); World.shake = 8; Input.rumble(1, 0.9, 260); }
-      break;
+    case 'hit': {   // v = severity 0.3 (glancing clip) .. 1 (dead centre); sparks, shake and rumble scale with it
+      const sv = v || 1, n = Math.round(4 + 8 * sv);
+      for (let i = 0; i < n; i++) emit(1, z + 150, lat + rr(-120, 120), 60, k.speed * 0.85 + rr(-1500, 1500) * sv, rr(-1800, 1800) * (0.5 + 0.5 * sv), rr(600, 2200), rr(0.3, 0.7), 36, i & 1 ? HEX(0xffe080) : HEX(0xffffff));
+      if (me && Game.cooldown.hit <= 0) { Game.cooldown.hit = 0.3; TDAudio.sfx('hit'); World.shake = Math.max(World.shake, 2 + 4.5 * sv); Input.rumble(0.35 + 0.55 * sv, 0.4 + 0.4 * sv, 140 + 120 * sv); }
+      break; }
     case 'bump': if (me && Game.cooldown.bump <= 0) { Game.cooldown.bump = 0.3; TDAudio.sfx('bump'); World.shake = Math.max(World.shake, 2.5); Input.rumble(0.35, 0.3, 90); } break;
-    case 'scrape': if (me && Game.cooldown.scrape <= 0) { Game.cooldown.scrape = 0.18; TDAudio.sfx('bump'); Input.rumble(0.2, 0.35, 60); for (let i = 0; i < 3; i++) emit(1, z, lat + v * 1000, 80, rr(0, 1500), rr(-600, 600), rr(300, 1100), rr(0.2, 0.4), 18, HEX(0xffd080)); } break;
+    case 'scrape': if (me && Game.cooldown.scrape <= 0) { Game.cooldown.scrape = 0.18; TDAudio.sfx('bump'); World.shake = Math.max(World.shake, 1 + 2 * (w || 0.3)); Input.rumble(0.12 + 0.25 * (w || 0.3), 0.35, 60); for (let i = 0; i < 6 + Math.round(6 * (w || 0.3)); i++) emit(1, z + 80, lat + v * 140, 70, k.speed * 0.9 + rr(-600, 600), -v * rr(100, 800), rr(500, 1500), rr(0.4, 0.8), 40, i & 1 ? HEX(0xfff0a0) : HEX(0xffa840)); } break;
+    case 'strip': if (me && Game.cooldown.strip <= 0) { Game.cooldown.strip = 0.09; Input.rumble(0.05 + 0.12 * v, 0.25 + 0.4 * v, 70); if (v > 0.3) TDAudio.sfx('strip'); } break;
     case 'lap': if (me) { TDAudio.sfx('lap'); say('LAP ' + (k.lap) + '/' + World.lapsToRun); } break;
     case 'finish': if (me) { World.state = 'finishing'; Game.finishT = 0; TDAudio.stopMusic(); TDAudio.sfx('fanfare'); Input.rumble(0.6, 0.6, 400); } break;
   }
@@ -1378,6 +1417,7 @@ const BOT = { steer: 0, gas: 1, brake: 0, drift: false };
 function botInput() {  // autopilot used by the test hooks (lap / fps checks); Game.botNoDrift = a casual driver who never drifts
   const P = World.player, cvNow = Track.curveAt(P.dist), cvA = Track.curveAt(P.dist + 1500), cv = Math.abs(cvA) > Math.abs(cvNow) ? cvA : cvNow;
   const tx = Math.sign(cv) * Math.min(1, Math.abs(cv) / 4) * 0.4, dr = !Game.botNoDrift && Math.abs(cvNow) >= 2.5 && P.speed > MAXV * 0.6;
+  if (Game.botNoDrift) { const c = Track.curveAt(P.dist + P.speed * 0.12); BOT.drift = false; BOT.steer = Math.max(-1, Math.min(1, -P.x * 2.5 + c * 0.10)); BOT.gas = 1; BOT.brake = 0; return BOT; }   // casual: centre + curve lead, full throttle, no drift
   BOT.drift = dr; BOT.steer = Math.max(-1, Math.min(1, (tx - P.x) * 3 + (dr ? Math.sign(cvNow) * 0.6 : 0))); BOT.gas = Game.botNoDrift && Math.abs(cv) > 3.4 ? 0.6 : 1; BOT.brake = 0; return BOT;
 }
 function nav(n, key) { const S = Input.S; if (S.pUp) { Game[key] = (Game[key] + n - 1) % n; TDAudio.sfx('move'); } if (S.pDown) { Game[key] = (Game[key] + 1) % n; TDAudio.sfx('move'); } }
